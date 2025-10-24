@@ -1,0 +1,38 @@
+{
+  "name": "reachinbox-onebox",
+  "version": "1.0.0",
+  "description": "ReachInbox TypeScript Node.js project",
+  "main": "dist/index.js",
+  "scripts": {
+    "start:dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test:imap": "ts-node test-imap.ts",
+    "test:classifier": "ts-node test-classifier.ts",
+    "test:notifications": "ts-node test-notifications.ts",
+    "test:reply": "ts-node test-reply-suggestion.ts",
+    "populate-qdrant": "ts-node populate-qdrant.ts"
+  },
+  "keywords": ["reachinbox", "email", "typescript", "node"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "imap": "^0.8.19",
+    "mailparser": "^3.6.5",
+    "@elastic/elasticsearch": "^8.11.0",
+    "@google/generative-ai": "^0.2.1",
+    "axios": "^1.6.2",
+    "@qdrant/js-client-rest": "^1.7.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^20.10.0",
+    "@types/imap": "^0.8.40",
+    "typescript": "^5.3.2",
+    "ts-node": "^10.9.1"
+  }
+}
