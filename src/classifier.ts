@@ -3,7 +3,7 @@ import { esClient } from './search';
 import { notificationService } from './notify';
 
 export interface ClassificationResult {
-  category: 'Interested' | 'Not Interested' | 'Follow Up' | 'Spam' | 'Important' | 'Newsletter';
+  category: 'Interested' | 'Meeting Booked' | 'Not Interested' | 'Out of Office' | 'Follow Up' | 'Spam' | 'Important' | 'Newsletter';
   confidence: number;
   reasoning?: string;
 }
@@ -45,10 +45,52 @@ class EmailClassifier {
   }
 
   /**
+   * Preprocess email text to improve classification accuracy
+   */
+  private preprocessEmail(text: string): string {
+    // Remove email signatures (usually marked with -- or ---)
+    const lines = text.split('\n');
+    let processedLines: string[] = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      // Stop at common signature indicators
+      if (line.match(/^[-=]{2,}/) || 
+          line.toLowerCase().includes('sent from') ||
+          line.toLowerCase().includes('best regards') ||
+          line.toLowerCase().includes('kind regards')) {
+        break;
+      }
+      
+      // Remove quoted email content (lines starting with >)
+      if (line.startsWith('>')) {
+        continue;
+      }
+      
+      processedLines.push(lines[i]);
+    }
+    
+    let processed = processedLines.join('\n');
+    
+    // Remove long URLs (might be noisy)
+    processed = processed.replace(/https?:\/\/[^\s]+/g, '[URL]');
+    
+    // Remove excessive whitespace
+    processed = processed.replace(/\s+/g, ' ').trim();
+    
+    return processed;
+  }
+
+  /**
    * Classify an email using Gemini API with strict JSON schema
    */
   async classifyEmail(request: ClassificationRequest): Promise<ClassificationResult> {
-    const prompt = this.buildClassificationPrompt(request);
+    // Preprocess the email body for better accuracy
+    const processedBody = this.preprocessEmail(request.body);
+    const processedRequest = { ...request, body: processedBody };
+    
+    const prompt = this.buildClassificationPrompt(processedRequest);
     
     try {
       const result = await this.callGeminiWithRetry(prompt);
@@ -96,34 +138,84 @@ class EmailClassifier {
    * Build the classification prompt with strict JSON schema
    */
   private buildClassificationPrompt(request: ClassificationRequest): string {
-    return `You are an email classification AI. Analyze the following email and classify it into one of the predefined categories.
+    return `You are an expert email classification AI specializing in business outreach and lead qualification. Analyze the following email and classify it into ONE of the predefined categories.
 
 EMAIL DETAILS:
 From: ${request.from}
 To: ${request.to.join(', ')}
 Subject: ${request.subject}
-Body: ${request.body.substring(0, 2000)}${request.body.length > 2000 ? '...' : ''}
+Body: ${request.body.substring(0, 3000)}${request.body.length > 3000 ? '...' : ''}
 
-CLASSIFICATION CATEGORIES:
-- "Interested": Email shows genuine interest in business/proposal
-- "Not Interested": Clear rejection or lack of interest
-- "Follow Up": Requires follow-up action or response
-- "Spam": Unsolicited commercial email or suspicious content
-- "Important": Urgent or high-priority business communication
-- "Newsletter": Regular updates, newsletters, or automated content
+CLASSIFICATION CATEGORIES WITH EXAMPLES:
 
-RESPONSE FORMAT:
-You MUST respond with ONLY a valid JSON object in this exact format:
+1. "Interested"
+   - Shows genuine interest in product/service/proposal
+   - Asks questions about features, pricing, availability
+   - Requests more information, demo, or pricing details
+   - Expresses positive sentiment like "interested", "would like to", "let's discuss"
+   - Example: "I'm interested in learning more about your product" or "Can we schedule a demo?"
+
+2. "Meeting Booked"
+   - Confirms a meeting or appointment is scheduled
+   - Contains calendar links, meeting times, or location details
+   - Includes phrases like "see you on", "meeting confirmed", "calendar invite sent"
+   - Example: "Looking forward to our meeting on Monday at 2 PM"
+
+3. "Not Interested"
+   - Clear rejection or decline
+   - Explicit statements of "not interested", "pass", "not a good fit"
+   - Asks to be removed from mailing list
+   - Shows negative sentiment about the offer
+   - Example: "Not interested at this time" or "We're not looking for this"
+
+4. "Out of Office"
+   - Automated out-of-office or vacation reply
+   - Contains phrases like "out of office", "on vacation", "away from email"
+   - Usually includes return date
+   - May mention emergency contact or alternate person
+   - Example: "I am currently out of office and will return on [date]"
+
+5. "Spam"
+   - Unsolicited commercial emails or suspicious content
+   - Promotional offers, scams, phishing attempts
+   - Misspellings, poor grammar, suspicious links
+   - Generic mass marketing content
+   - Example: Generic promotional emails or suspicious offers
+
+6. "Follow Up"
+   - Requires action or response (default category if unclear)
+   - Questions that need answers
+   - Status updates or progress reports
+   - Not clearly fitting other categories but needs attention
+
+7. "Important"
+   - Urgent business matters
+   - Contract discussions, time-sensitive decisions
+   - Escalated issues or complaints
+   - High-value opportunities requiring immediate attention
+
+8. "Newsletter"
+   - Regular updates, newsletters, automated content
+   - Mass distribution emails
+   - Subscriptions or automated notifications
+   - Content updates or blog posts
+
+ANALYSIS INSTRUCTIONS:
+1. Read the ENTIRE email carefully (subject + body)
+2. Identify the PRIMARY intent of the email
+3. Check if it clearly matches one of the first 5 categories (Interested, Meeting Booked, Not Interested, Out of Office, Spam)
+4. If uncertain, default to "Follow Up"
+5. Provide a confidence score: 0.9+ (very certain), 0.7-0.9 (confident), 0.5-0.7 (somewhat confident), <0.5 (uncertain)
+6. Explain your reasoning in 1-2 sentences
+
+RESPONSE FORMAT (JSON ONLY - NO OTHER TEXT):
 {
-  "category": "one of the six categories above",
+  "category": "exact category name from above",
   "confidence": 0.85,
-  "reasoning": "brief explanation of your classification"
+  "reasoning": "Clear 1-2 sentence explanation"
 }
 
-The confidence should be a number between 0.0 and 1.0.
-The reasoning should be a brief explanation of why you chose this category.
-
-Respond with ONLY the JSON object, no additional text or formatting.`;
+CRITICAL: Respond with ONLY the JSON object. No markdown, no code blocks, no additional text.`;
   }
 
   /**
@@ -131,7 +223,16 @@ Respond with ONLY the JSON object, no additional text or formatting.`;
    */
   private async callGeminiWithRetry(prompt: string, attempt: number = 1): Promise<string> {
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+      const model = this.genAI.getGenerativeModel({ 
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+          temperature: 0.3, // Lower temperature for more consistent classification
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 500,
+          responseMimeType: "application/json"
+        }
+      });
       
       const result = await model.generateContent(prompt);
       const response = await result.response;
@@ -218,32 +319,56 @@ Respond with ONLY the JSON object, no additional text or formatting.`;
    */
   private parseClassificationResult(response: string): ClassificationResult {
     try {
-      // Clean the response - remove any markdown formatting
-      let cleanResponse = response.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      let cleanResponse = response.trim();
+      
+      // Remove markdown code blocks if present
+      cleanResponse = cleanResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      
+      // Remove any leading/trailing non-JSON text
+      const jsonMatch = cleanResponse.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        cleanResponse = jsonMatch[0];
+      }
       
       // Parse JSON
       const parsed = JSON.parse(cleanResponse);
       
       // Validate required fields
-      if (!parsed.category || !parsed.confidence) {
+      if (!parsed.category || parsed.confidence === undefined) {
         throw new Error('Invalid response format: missing required fields');
       }
       
-      // Validate category
-      const validCategories = ['Interested', 'Not Interested', 'Follow Up', 'Spam', 'Important', 'Newsletter'];
-      if (!validCategories.includes(parsed.category)) {
-        throw new Error(`Invalid category: ${parsed.category}`);
+      // Validate category (case-insensitive match)
+      const validCategories = ['Interested', 'Meeting Booked', 'Not Interested', 'Out of Office', 'Follow Up', 'Spam', 'Important', 'Newsletter'];
+      const normalizedCategory = parsed.category.trim();
+      
+      if (!validCategories.includes(normalizedCategory)) {
+        console.warn(`⚠️ Invalid category received: ${normalizedCategory}`);
+        // Try to match with case-insensitive comparison
+        const matchedCategory = validCategories.find(cat => 
+          cat.toLowerCase() === normalizedCategory.toLowerCase()
+        );
+        
+        if (matchedCategory) {
+          parsed.category = matchedCategory;
+          console.log(`✅ Mapped ${normalizedCategory} to ${matchedCategory}`);
+        } else {
+          throw new Error(`Invalid category: ${normalizedCategory}`);
+        }
       }
       
-      // Validate confidence
-      if (typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
-        throw new Error(`Invalid confidence: ${parsed.confidence}`);
+      // Validate and normalize confidence
+      let confidence = parsed.confidence;
+      if (typeof confidence === 'string') {
+        confidence = parseFloat(confidence);
       }
+      if (isNaN(confidence) || confidence < 0) confidence = 0.5;
+      if (confidence > 1) confidence = 1.0;
       
       return {
         category: parsed.category,
-        confidence: parsed.confidence,
-        reasoning: parsed.reasoning || ''
+        confidence: confidence,
+        reasoning: parsed.reasoning || 'No reasoning provided'
       };
     } catch (error) {
       console.error('❌ Failed to parse classification result:', error);

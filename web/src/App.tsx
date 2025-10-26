@@ -69,7 +69,9 @@ const App: React.FC = () => {
   const getCategoryColor = (category?: string): string => {
     switch (category) {
       case 'Interested': return '#10b981'; // green
+      case 'Meeting Booked': return '#3b82f6'; // blue
       case 'Not Interested': return '#ef4444'; // red
+      case 'Out of Office': return '#f97316'; // orange
       case 'Follow Up': return '#3b82f6'; // blue
       case 'Spam': return '#f59e0b'; // yellow
       case 'Important': return '#8b5cf6'; // purple

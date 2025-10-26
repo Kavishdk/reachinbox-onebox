@@ -27,6 +27,7 @@ export interface ImapAccount {
   reconnectDelay: number;
   watchdogTimer?: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
+  initialSyncCompleted?: boolean;
 }
 
 class ImapSyncManager {
@@ -152,9 +153,79 @@ class ImapSyncManager {
 
       console.log(`📁 INBOX opened for account ${account.id}, ${box.messages.total} messages`);
       
+      // If this is the first connection, fetch last 30 days of emails
+      if (!account.initialSyncCompleted) {
+        console.log(`📥 Performing initial sync for account: ${account.id} (last 30 days)`);
+        this.fetchLast30Days(account);
+        account.initialSyncCompleted = true;
+      }
+      
       // Start IDLE (some imap libs expose idle via non-typed methods)
       (account.connection as any).idle();
     });
+  }
+
+  private async fetchLast30Days(account: ImapAccount): Promise<void> {
+    if (!account.isConnected || !account.connection) return;
+
+    try {
+      console.log(`📥 Fetching last 30 days of emails for account: ${account.id}`);
+      
+      // Calculate date 30 days ago
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      // Format date for IMAP search (DD-MMM-YYYY)
+      const dateStr = thirtyDaysAgo.toISOString().split('T')[0].split('-').reverse().join('-').replace(/-/g, '-');
+      
+      // Search for emails from last 30 days
+      const searchCriteria = ['SINCE', dateStr];
+      const fetchOptions = {
+        bodies: '',
+        struct: true,
+        markSeen: false
+      };
+
+      (account.connection as any).search(searchCriteria, (err: any, results: any) => {
+        if (err) {
+          console.error(`❌ Search failed for ${account.id}:`, err);
+          return;
+        }
+
+        if (results && results.length > 0) {
+          console.log(`📬 Found ${results.length} emails from last 30 days for account: ${account.id}`);
+          
+          const fetch = (account.connection as any).fetch(results, fetchOptions);
+          
+          fetch.on('message', (msg: any, seqno: any) => {
+            let buffer = '';
+
+            msg.on('body', (stream: any) => {
+              stream.on('data', (chunk: any) => {
+                buffer += chunk.toString('utf8');
+              });
+
+              stream.once('end', () => {
+                this.processEmail(buffer, account, seqno);
+              });
+            });
+          });
+
+          fetch.once('error', (err: any) => {
+            console.error(`❌ Fetch error during initial sync for ${account.id}:`, err);
+          });
+
+          fetch.once('end', () => {
+            console.log(`✅ Finished initial sync for account: ${account.id}`);
+          });
+        } else {
+          console.log(`📭 No emails found in last 30 days for account: ${account.id}`);
+        }
+      });
+
+    } catch (error) {
+      console.error(`❌ Error during initial sync for ${account.id}:`, error);
+    }
   }
 
   private async fetchNewEmails(account: ImapAccount): Promise<void> {

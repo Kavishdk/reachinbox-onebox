@@ -35,14 +35,15 @@ const mockEmails: MockEmail[] = [
   }
 ];
 
-// Initialize Elasticsearch client only when not in mock mode
-// Initialize Elasticsearch client or use a mock client
-const esClient = process.env.ES_URL?.startsWith('mock://') 
-  ? null as unknown as Client // Mock client will never be used since all operations check mock:// first
-  : new Client({
-      node: process.env.ES_URL || 'http://localhost:9200'
-    });
+// Lazily create the Elasticsearch client so importing this module
+// won't attempt to connect or check server compatibility at startup.
+function getEsClient(): Client | null {
+  if (process.env.ES_URL?.startsWith('mock://')) return null;
 
+  // create a real client and skip compatibility check which can fail
+  // in certain development setups
+  return new Client({ node: process.env.ES_URL || 'http://localhost:9200', checkCompatibility: false });
+}
 export interface EmailDocument {
   id: string;
   accountId: string;
@@ -83,9 +84,12 @@ export async function indexEmail(emailDoc: EmailDocument): Promise<void> {
     
     // Ensure index exists with proper mapping
     await ensureIndexExists(indexName);
-    
+
     // Index the email document
-    await esClient.index({
+    const client = getEsClient();
+    if (!client) throw new Error('Elasticsearch client not available');
+
+    await client.index({
       index: indexName,
       id: emailDoc.id,
       document: {
@@ -103,10 +107,13 @@ export async function indexEmail(emailDoc: EmailDocument): Promise<void> {
 }
 
 async function ensureIndexExists(indexName: string): Promise<void> {
-  const exists = await esClient.indices.exists({ index: indexName });
-  
+  const client = getEsClient();
+  if (!client) throw new Error('Elasticsearch client not available');
+
+  const exists = await client.indices.exists({ index: indexName });
+
   if (!exists) {
-    await esClient.indices.create({
+    await client.indices.create({
       index: indexName,
       mappings: {
         properties: {
@@ -179,7 +186,10 @@ export async function searchEmails(
 
     const indexName = `emails-${accountId}`;
     
-    const response = await esClient.search({
+    const client = getEsClient();
+    if (!client) throw new Error('Elasticsearch client not available');
+
+    const response = await client.search({
       index: indexName,
       from: from || 0,
       size: size || 10,
